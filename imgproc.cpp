@@ -1,3 +1,11 @@
+/******************************************
+** File: imgproc.cpp
+** Authors: Augusto Blomer, Victor Konen
+**
+** Converts images to text lab for
+** seam_carver and back
+** See readme.txt
+*******************************************/
 #include <stdio.h>
 #include <math.h>
 #include <cfloat>
