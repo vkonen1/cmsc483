@@ -146,13 +146,13 @@ void computeImageEnergy() {
             ud += my_energy_pixels;
             continue;
         }
-        /*if (i > 0) {
+        if (i > 0) {
             ud += energy_pixels[i - 1];
-        }*/
+        }
         //printf("%d send %d pixels and recv %d pixels from %d\n", rank, my_energy_pixels, energy_pixels[i], i);
-        //MPI_Sendrecv(&my_energy, my_energy_pixels, MPI_DOUBLE, i, 0, &image_energy[ud], energy_pixels[i], MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Sendrecv(&my_energy, my_energy_pixels, MPI_DOUBLE, i, 0, &image_energy[ud], energy_pixels[i], MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-        for (j = 0; j < my_energy_pixels; j++) {
+        /*for (j = 0; j < my_energy_pixels; j++) {
             MPI_Request request;
             MPI_Isend(&my_energy[j], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &request);
         }
@@ -160,7 +160,7 @@ void computeImageEnergy() {
         for (j = 0; j < energy_pixels[i]; j++) {
             MPI_Request request;
             MPI_Irecv(&image_energy[ud++], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &request);
-        }
+        }*/
     }
 }
 
@@ -378,8 +378,12 @@ void outputCarved(const char *file_name) {
 
 //stores the input image, resizes with seam carving, and generates the output image
 int main(int argc, char *argv[]) {
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
     if (!readInput(argv[1])) {
-        return 0;
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     //get the output width and height
@@ -389,7 +393,7 @@ int main(int argc, char *argv[]) {
     //exit if the output dimensions are larger than the input image dimensions
     if (initial_width < target_width || initial_height < target_height) {
         printf("Error: Desired output image dimensions larger than input image dimensions.\n");
-        return 0;
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     image_energy = new double[initial_width * initial_height];
@@ -397,10 +401,6 @@ int main(int argc, char *argv[]) {
     previous_x = new int[initial_width * initial_height];
     previous_y = new int[initial_width * initial_height];
     n = initial_width * initial_height;
-
-    MPI_Init(&argc, &argv);
-    MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
     assignPixels();
 
@@ -419,15 +419,12 @@ int main(int argc, char *argv[]) {
         //remove the seam
         removeHorizontalSeam();
     }
+
     if (rank == 0) {
         outputCarved(argv[2]);
     }
+
     MPI_Finalize();
 
-
-
-    //clean up
-    delete [] image;
-    delete [] image_energy;
     return 0;
 }
