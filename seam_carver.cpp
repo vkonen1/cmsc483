@@ -5,15 +5,17 @@
 ** Driver source code for the program
 ** See readme.txt
 *******************************************/
+#include "mpi.h"
+
 #include <stdio.h>
 #include <math.h>
 #include <cfloat>
 #include <string>
+#include <sstream>
 
-#include "cimg.h"
 #include "sl_vector.h"
 
-using namespace cimg_library;
+#define USE_MPI
 
 //keeps track of the pixels in the image
 SlVector3 *image;
@@ -36,6 +38,47 @@ double max_energy = 0;
 double *path_costs;
 int *previous_x;
 int *previous_y;
+
+//number of pixels in the original image
+int n;
+
+//mpi variables
+int rank, numprocs;
+int my_energy_pixels, my_energy_offset, extra_energy_pixels;
+double my_max_energy = 0;
+int *energy_pixels;
+
+void assignPixels() {
+    int i, temp_energy_pixels;
+
+    /* this determines which processes get which pixels */
+    my_energy_pixels = n / numprocs;
+    extra_energy_pixels = (n - (my_energy_pixels * numprocs));
+    //need to assign additonal pixels to some processes
+    if (extra_energy_pixels > 0) {
+        //another node for this process
+        if (rank < extra_energy_pixels) {
+            my_energy_pixels++;
+            my_energy_offset = rank * my_energy_pixels;
+        } else {
+            my_energy_offset = extra_energy_pixels * (my_energy_pixels + 1) + (rank - extra_energy_pixels) * my_energy_pixels;
+        }
+    } else {
+        my_energy_offset = rank * my_energy_pixels;    
+    }
+
+    //update my knowledge of pixels counts assigned to each process
+    energy_pixels = new int[numprocs];
+    energy_pixels[rank] = my_energy_pixels;
+    for (i = 0; i < numprocs; i++) {
+        if (rank == i) {
+            continue;
+        }
+
+        MPI_Sendrecv(&my_energy_pixels, 1, MPI_INT, i, 0, &temp_energy_pixels, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        energy_pixels[i] = temp_energy_pixels;
+    }
+}
 
 //computes the x gradient component for the energy function
 double gradx(int x, int y) {
@@ -76,18 +119,47 @@ double grady(int x, int y) {
 //computes the energy of the pixel at x,y and updates the max energy if needed
 double energy(int x, int y) {
     double result = sqrt(pow(gradx(x, y), 2) + pow(grady(x, y), 2));
-    if (result > max_energy) {
-        max_energy = result;
+    if (result > my_max_energy) {
+        my_max_energy = result;
     }
+    MPI_Allreduce(&my_max_energy, &max_energy, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    my_max_energy = max_energy;
     return result;
 }
 
 //finds the energy of each pixel in the image and stores it
 void computeImageEnergy() {
-    //compute the energy of the pixels
-    for (int i = 0; i < initial_width; i++) {
-        for (int j = 0; j < initial_height; j++) {
-            image_energy[i * initial_height + j] = energy(i, j);
+    int x, y, i, j = 0, ud = 0;
+    double my_energy[my_energy_pixels];
+    //compute the energy of my pixels
+
+    for (i = my_energy_offset; i < my_energy_offset + my_energy_pixels; i++) {
+        x = i / initial_height;
+        y = i % initial_height;
+        image_energy[i] = energy(x, y);
+        my_energy[j++] = image_energy[i];
+    }
+
+    //send and receive data to and from each process to update image_energy for self
+    for (i = 0; i < numprocs; i++) {
+        if (rank == i) {
+            ud += my_energy_pixels;
+            continue;
+        }
+        /*if (i > 0) {
+            ud += energy_pixels[i - 1];
+        }*/
+        //printf("%d send %d pixels and recv %d pixels from %d\n", rank, my_energy_pixels, energy_pixels[i], i);
+        //MPI_Sendrecv(&my_energy, my_energy_pixels, MPI_DOUBLE, i, 0, &image_energy[ud], energy_pixels[i], MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        for (j = 0; j < my_energy_pixels; j++) {
+            MPI_Request request;
+            MPI_Isend(&my_energy[j], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &request);
+        }
+
+        for (j = 0; j < energy_pixels[i]; j++) {
+            MPI_Request request;
+            MPI_Irecv(&image_energy[ud++], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &request);
         }
     }
 }
@@ -276,9 +348,9 @@ bool readInput(const char * file_name) {
 }
 
 //outputs the seam carved version of the image at the new dimensions
-void outputCarved(char *file_name) {
+void outputCarved(const char *file_name) {
     FILE *f;
-    
+
     //open the output file
     f = fopen(file_name, "w");
     if (f == NULL) {
@@ -324,6 +396,13 @@ int main(int argc, char *argv[]) {
     path_costs = new double[initial_width * initial_height];
     previous_x = new int[initial_width * initial_height];
     previous_y = new int[initial_width * initial_height];
+    n = initial_width * initial_height;
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &numprocs);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    assignPixels();
 
     //remove vertical seams until reaching the target width
     while (current_width > target_width) {
@@ -340,8 +419,11 @@ int main(int argc, char *argv[]) {
         //remove the seam
         removeHorizontalSeam();
     }
+    if (rank == 0) {
+        outputCarved(argv[2]);
+    }
+    MPI_Finalize();
 
-    outputCarved(argv[2]);
 
 
     //clean up
