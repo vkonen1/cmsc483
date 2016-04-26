@@ -44,38 +44,39 @@ int n;
 
 //mpi variables
 int rank, numprocs;
-int my_energy_pixels, my_energy_offset, extra_energy_pixels;
+int my_epixels_c, my_epixels_offset, extra_energy_pixels;
 double my_max_energy = 0;
 int *energy_pixels;
 
+//works
 void assignPixels() {
     int i, temp_energy_pixels;
 
     /* this determines which processes get which pixels */
-    my_energy_pixels = n / numprocs;
-    extra_energy_pixels = (n - (my_energy_pixels * numprocs));
+    my_epixels_c = n / numprocs;
+    extra_energy_pixels = (n - (my_epixels_c * numprocs));
     //need to assign additonal pixels to some processes
     if (extra_energy_pixels > 0) {
         //another node for this process
         if (rank < extra_energy_pixels) {
-            my_energy_pixels++;
-            my_energy_offset = rank * my_energy_pixels;
+            my_epixels_c++;
+            my_epixels_offset = rank * my_epixels_c;
         } else {
-            my_energy_offset = extra_energy_pixels * (my_energy_pixels + 1) + (rank - extra_energy_pixels) * my_energy_pixels;
+            my_epixels_offset = extra_energy_pixels * (my_epixels_c + 1) + (rank - extra_energy_pixels) * my_epixels_c;
         }
     } else {
-        my_energy_offset = rank * my_energy_pixels;    
+        my_epixels_offset = rank * my_epixels_c;    
     }
 
     //update my knowledge of pixels counts assigned to each process
     energy_pixels = new int[numprocs];
-    energy_pixels[rank] = my_energy_pixels;
+    energy_pixels[rank] = my_epixels_c;
     for (i = 0; i < numprocs; i++) {
         if (rank == i) {
             continue;
         }
 
-        MPI_Sendrecv(&my_energy_pixels, 1, MPI_INT, i, 0, &temp_energy_pixels, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Sendrecv(&my_epixels_c, 1, MPI_INT, i, 0, &temp_energy_pixels, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         energy_pixels[i] = temp_energy_pixels;
     }
 }
@@ -129,39 +130,50 @@ double energy(int x, int y) {
 
 //finds the energy of each pixel in the image and stores it
 void computeImageEnergy() {
-    int x, y, i, j = 0, ud = 0;
-    double my_energy[my_energy_pixels];
-    //compute the energy of my pixels
+    int x, y, i, j, tempc, offset = 0;
+    double *my_img_energy;
+    double *temp_img_energy;
 
-    for (i = my_energy_offset; i < my_energy_offset + my_energy_pixels; i++) {
+    my_img_energy = (double *)malloc(my_epixels_c * sizeof(double));
+    //compute the energy of my pixels
+    for (i = my_epixels_offset; i < my_epixels_offset + my_epixels_c; i++) {
         x = i / initial_height;
         y = i % initial_height;
+        if (x > current_width || y > current_height) {
+            //printf("skipped\n");
+            my_img_energy[i - my_epixels_offset] = image_energy[i];
+        }
+        //printf("%d %d\n", x * initial_height + y, i);
+        //printf("%d %d %d\n", rank, x, y);
         image_energy[i] = energy(x, y);
-        my_energy[j++] = image_energy[i];
+        my_img_energy[i - my_epixels_offset] = image_energy[i];
     }
 
     //send and receive data to and from each process to update image_energy for self
     for (i = 0; i < numprocs; i++) {
         if (rank == i) {
-            ud += my_energy_pixels;
+            offset += my_epixels_c;
             continue;
         }
-        if (i > 0) {
-            ud += energy_pixels[i - 1];
+        if (i > 1) {
+            offset += energy_pixels[i - 1];
         }
-        //printf("%d send %d pixels and recv %d pixels from %d\n", rank, my_energy_pixels, energy_pixels[i], i);
-        MPI_Sendrecv(&my_energy, my_energy_pixels, MPI_DOUBLE, i, 0, &image_energy[ud], energy_pixels[i], MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-        /*for (j = 0; j < my_energy_pixels; j++) {
-            MPI_Request request;
-            MPI_Isend(&my_energy[j], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &request);
+        if (i == 1 && rank != 0) {
+            offset += energy_pixels[0];
         }
-
-        for (j = 0; j < energy_pixels[i]; j++) {
-            MPI_Request request;
-            MPI_Irecv(&image_energy[ud++], 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, &request);
-        }*/
+        tempc = energy_pixels[i];
+        temp_img_energy = (double *)malloc(tempc * sizeof(double));
+        //printf("%d send %d pixels and recv %d pixels from %d\n", rank, my_epixels_c, energy_pixels[i], i);
+        MPI_Sendrecv(my_img_energy, my_epixels_c, MPI_DOUBLE, i, 0, temp_img_energy, tempc, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    
+        for (j = 0; j < tempc; j++) {
+            //printf("%d %d\n", rank, offset + j);
+            //printf("%d %d %lf\n", rank, offset + j, image_energy[offset + j]);
+            image_energy[offset + j] = temp_img_energy[j];
+        }
+        free(temp_img_energy);
     }
+    free(my_img_energy);
 }
 
 //removes the lowest energy vertical seam from the image
@@ -396,11 +408,15 @@ int main(int argc, char *argv[]) {
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
-    image_energy = new double[initial_width * initial_height];
-    path_costs = new double[initial_width * initial_height];
-    previous_x = new int[initial_width * initial_height];
-    previous_y = new int[initial_width * initial_height];
+    image_energy = (double *) malloc(initial_width * initial_height * sizeof(double));
+    path_costs = (double *) malloc(initial_width * initial_height * sizeof(double));
+    previous_x = (int *) malloc(initial_width * initial_height * sizeof(int));
+    previous_y = (int *) malloc(initial_width * initial_height * sizeof(int));
     n = initial_width * initial_height;
+
+    if (image_energy == NULL || path_costs == NULL || previous_x == NULL || previous_y == NULL) {
+        printf("problem");
+    }
 
     assignPixels();
 
@@ -423,6 +439,11 @@ int main(int argc, char *argv[]) {
     if (rank == 0) {
         outputCarved(argv[2]);
     }
+
+    free(image_energy);
+    free(path_costs);
+    free(previous_x);
+    free(previous_y);
 
     MPI_Finalize();
 
