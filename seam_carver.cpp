@@ -255,9 +255,30 @@ void removeHorizontalSeam() {
     double min_energy;
     int prev_x;
     int prev_y;
+    
+    // split up work between processes
+    double *path_cost; // path costs that will be sent
+    int start = (current_width / numprocs) * rank;
+    int end, i;
+    if (current_width % numprocs > rank) {
+        start += rank;
+        end = start + (current_width / numprocs) + 1;
+    } else {
+        start += current_width % numprocs;
+        end = start + (current_width / numprocs);
+    }
+    
     //find the lowest cost seam by computing the lowest cost paths to each pixel
-    for (int x = 0; x < current_width; x++) {
+    for (int x = start; x < end; x++) {
+        
+        if (rank > 0 && x == start) {
+            MPI_Recv(path_cost, current_height, MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            for (i = 0; i < current_height; i++)
+                path_costs[(x - 1) * initial_height + i] = path_cost[i];
+        }
+        
         for (int y = 0; y < current_height; y++) {
+            
             if (x == 0) {
                 path_costs[x * initial_height + y] = image_energy[x * initial_height + y];
                 previous_x[x * initial_height + y] = -1;
@@ -298,8 +319,13 @@ void removeHorizontalSeam() {
                 previous_y[x * initial_height + y] = prev_y;
             }
         }
+        
+        if (rank < (numprocs - 1) && x == (end - 1)) {
+            path_cost = &path_costs[x * initial_height];
+            MPI_Send(path_cost, current_height, MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD);
+        }
     }
-
+    
     //find the ycoord the lowest cost seam starts at the right of the current image
     int y_coord = 0;
     for (int y = 0; y < current_height; y++) {
