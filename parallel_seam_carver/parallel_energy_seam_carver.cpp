@@ -69,7 +69,6 @@ void assignPixels() {
     }
 
     //update my knowledge of pixels counts assigned to each process
-    energy_pixels = new int[numprocs];
     energy_pixels[rank] = my_epixels_c;
     for (i = 0; i < numprocs; i++) {
         if (rank == i) {
@@ -123,8 +122,6 @@ double energy(int x, int y) {
     if (result > my_max_energy) {
         my_max_energy = result;
     }
-    MPI_Allreduce(&my_max_energy, &max_energy, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-    my_max_energy = max_energy;
     return result;
 }
 
@@ -173,6 +170,9 @@ void computeImageEnergy() {
         }
         free(temp_img_energy);
     }
+    //max energy communication cause serious slowdown and does not have a major effect
+    //MPI_Allreduce(&my_max_energy, &max_energy, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    //my_max_energy = max_energy;
     free(my_img_energy);
 }
 
@@ -412,9 +412,11 @@ int main(int argc, char *argv[]) {
     path_costs = (double *) malloc(initial_width * initial_height * sizeof(double));
     previous_x = (int *) malloc(initial_width * initial_height * sizeof(int));
     previous_y = (int *) malloc(initial_width * initial_height * sizeof(int));
+    energy_pixels = (int *) malloc(numprocs * sizeof(int));
     n = initial_width * initial_height;
 
-    if (image_energy == NULL || path_costs == NULL || previous_x == NULL || previous_y == NULL) {
+    if (image_energy == NULL || path_costs == NULL || previous_x == NULL ||
+        previous_y == NULL || energy_pixels == NULL) {
         printf("problem");
     }
 
@@ -444,6 +446,7 @@ int main(int argc, char *argv[]) {
     free(path_costs);
     free(previous_x);
     free(previous_y);
+    free(energy_pixels);
 
     MPI_Finalize();
 
