@@ -1,0 +1,59 @@
+body {
+    background-color: #778899;
+    font-family: arial;
+    margin: 0;
+    padding: 15px;
+}
+
+h1 {
+    color: #23282d;
+    font-size: 42px;
+    margin: 0 0 25px 0;
+}
+
+.clear {
+    clear: both;
+}
+
+.phase {
+    float: left;
+    margin: 0 50px 0 0;
+    padding: 0 50px 0 0;
+    border-right: 1px solid #d6dbe0;
+}
+.phase-last {
+    margin: 0;
+    padding: 0;
+    border-right: none;
+}
+
+.phase-section {
+    margin: 0 0 25px 0;
+}
+.phase-section-last {
+    margin: 0;
+    padding: 0;
+}
+.phase-section > h2 {
+    color: #23282d;
+    font-size: 28px;
+    margin: 5px 0;
+}
+.phase-section > p {
+    color: #d6dbe0;
+    font-size: 18px;
+    margin: 5px 0;
+}
+.phase-section > p > a {
+    color: inherit;
+    text-decoration: none;
+}
+.phase-section > p > a:active, .phase-section > p > a:focus {
+    outline: 0;
+}
+.phase-section > p > a:hover {
+    color: #23282d !important;
+}
+.phase-section > p > a:visited {
+    color: inherit;
+}
