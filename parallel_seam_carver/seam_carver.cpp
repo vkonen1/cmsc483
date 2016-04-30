@@ -257,23 +257,19 @@ void removeHorizontalSeam() {
     int prev_y;
     
     // split up work between processes
-    double *path_cost; // path costs that will be sent
-    int start = (current_width / numprocs) * rank;
-    int end, i;
-    if (current_width % numprocs > rank) {
-        start += rank;
-        end = start + (current_width / numprocs) + 1;
-    } else {
-        start += current_width % numprocs;
-        end = start + (current_width / numprocs);
-    }
+    double *path_cost = (double *) malloc(initial_height * sizeof(double)); // path costs that will be sent
+    int columns_per_process = current_width / numprocs;
+    int start = columns_per_process * rank;
+    int end = columns_per_process * (rank + 1);
+    if (rank == numprocs - 1)
+        end += (current_width % numprocs);
     
     //find the lowest cost seam by computing the lowest cost paths to each pixel
     for (int x = start; x < end; x++) {
         
         if (rank > 0 && x == start) {
-            MPI_Recv(path_cost, current_height, MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            for (i = 0; i < current_height; i++)
+            MPI_Recv(path_cost, current_height, MPI_DOUBLE, rank - 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            for (int i = 0; i < current_height; i++)
                 path_costs[(x - 1) * initial_height + i] = path_cost[i];
         }
         
@@ -326,13 +322,20 @@ void removeHorizontalSeam() {
         }
     }
     
+    MPI_Allgather(&previous_y[start * initial_height], n / numprocs, MPI_INT, previous_y, n / numprocs, MPI_INT,
+                    MPI_COMM_WORLD);
+    
     //find the ycoord the lowest cost seam starts at the right of the current image
     int y_coord = 0;
-    for (int y = 0; y < current_height; y++) {
-        if (path_costs[(current_width - 1) * initial_height + y] < path_costs[(current_width - 1) * initial_height + y_coord]) {
-            y_coord = y;
+    if (rank == numprocs - 1) {
+        for (int y = 0; y < current_height; y++) {
+            if (path_costs[(current_width - 1) * initial_height + y] < path_costs[(current_width - 1) * initial_height + y_coord]) {
+                y_coord = y;
+            }
         }
     }
+    
+    MPI_Bcast(&y_coord, 1, MPI_INT, numprocs - 1, MPI_COMM_WORLD);
 
     //delete the seam from right to left
     for (int x = current_width - 1; x >= 0; x--) {
