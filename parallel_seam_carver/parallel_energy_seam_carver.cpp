@@ -1,8 +1,8 @@
 /******************************************
-** File: seam_carver.cpp
+** File: parallel_energy_seam_carver.cpp
 ** Authors: Augusto Blomer, Victor Konen
 **
-** Driver source code for the program
+** Parallelized energy function only
 ** See readme.txt
 *******************************************/
 #include "mpi.h"
@@ -48,7 +48,7 @@ int my_epixels_c, my_epixels_offset, extra_energy_pixels;
 double my_max_energy = 0;
 int *energy_pixels;
 
-//works
+//determines which pixels this process will comput the energy for
 void assignPixels() {
     int i, temp_energy_pixels;
 
@@ -62,7 +62,8 @@ void assignPixels() {
             my_epixels_c++;
             my_epixels_offset = rank * my_epixels_c;
         } else {
-            my_epixels_offset = extra_energy_pixels * (my_epixels_c + 1) + (rank - extra_energy_pixels) * my_epixels_c;
+            my_epixels_offset = extra_energy_pixels * (my_epixels_c + 1) + 
+                (rank - extra_energy_pixels) * my_epixels_c;
         }
     } else {
         my_epixels_offset = rank * my_epixels_c;    
@@ -75,7 +76,8 @@ void assignPixels() {
             continue;
         }
 
-        MPI_Sendrecv(&my_epixels_c, 1, MPI_INT, i, 0, &temp_energy_pixels, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Sendrecv(&my_epixels_c, 1, MPI_INT, i, 0, &temp_energy_pixels, 1, 
+            MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         energy_pixels[i] = temp_energy_pixels;
     }
 }
@@ -86,9 +88,11 @@ double gradx(int x, int y) {
     if (x == 0) {
         result = 2.0 * mag(image[initial_height + y] - image[y]);
     } else if (x == initial_width - 1) {
-        result = 2.0 * mag(image[x * initial_height + y] - image[(x - 1) * initial_height + y]);
+        result = 2.0 * mag(image[x * initial_height + y] - 
+            image[(x - 1) * initial_height + y]);
     } else {
-        result = mag(image[(x + 1) * initial_height + y] - image[(x - 1) * initial_height + y]);
+        result = mag(image[(x + 1) * initial_height + y] - 
+            image[(x - 1) * initial_height + y]);
     }
 
     if (result < 0) {
@@ -102,11 +106,14 @@ double gradx(int x, int y) {
 double grady(int x, int y) {
     double result = 0;
     if (y == 0) {
-        result = 2.0 * mag(image[x * initial_height + 1] - image[x * initial_height]);
+        result = 2.0 * mag(image[x * initial_height + 1] - 
+            image[x * initial_height]);
     } else if (y == initial_height - 1) {
-        result = 2.0 * mag(image[x * initial_height + y] - image[x * initial_height + y - 1]);
+        result = 2.0 * mag(image[x * initial_height + y] - 
+            image[x * initial_height + y - 1]);
     } else {
-        result = mag(image[x * initial_height + y + 1] - image[x * initial_height + y - 1]);
+        result = mag(image[x * initial_height + y + 1] - 
+            image[x * initial_height + y - 1]);
     }
 
     if (result < 0) {
@@ -119,6 +126,10 @@ double grady(int x, int y) {
 //computes the energy of the pixel at x,y and updates the max energy if needed
 double energy(int x, int y) {
     double result = sqrt(pow(gradx(x, y), 2) + pow(grady(x, y), 2));
+    /*
+    maximum energy communication results in a serious slowdown and does not
+    have a major effect on the resulting image quality
+    */
     if (result > my_max_energy) {
         my_max_energy = result;
     }
@@ -146,7 +157,7 @@ void computeImageEnergy() {
         my_img_energy[i - my_epixels_offset] = image_energy[i];
     }
 
-    //send and receive data to and from each process to update image_energy for self
+    //send and receive data to and from each process to update image_energy
     for (i = 0; i < numprocs; i++) {
         if (rank == i) {
             offset += my_epixels_c;
@@ -160,19 +171,15 @@ void computeImageEnergy() {
         }
         tempc = energy_pixels[i];
         temp_img_energy = (double *)malloc(tempc * sizeof(double));
-        //printf("%d send %d pixels and recv %d pixels from %d\n", rank, my_epixels_c, energy_pixels[i], i);
-        MPI_Sendrecv(my_img_energy, my_epixels_c, MPI_DOUBLE, i, 0, temp_img_energy, tempc, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Sendrecv(my_img_energy, my_epixels_c, MPI_DOUBLE, i, 0, 
+            temp_img_energy, tempc, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, 
+            MPI_STATUS_IGNORE);
     
         for (j = 0; j < tempc; j++) {
-            //printf("%d %d\n", rank, offset + j);
-            //printf("%d %d %lf\n", rank, offset + j, image_energy[offset + j]);
             image_energy[offset + j] = temp_img_energy[j];
         }
         free(temp_img_energy);
     }
-    //max energy communication cause serious slowdown and does not have a major effect
-    //MPI_Allreduce(&my_max_energy, &max_energy, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-    //my_max_energy = max_energy;
     free(my_img_energy);
 }
 
