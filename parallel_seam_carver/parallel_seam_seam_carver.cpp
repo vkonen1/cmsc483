@@ -209,6 +209,7 @@ void removeVerticalSeam() {
 
                 //receive preceding process's rightmost cost
                 MPI_Recv(&temp_end_cost, 1, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                path_costs[(start - 1) * initial_height + y] = temp_end_cost;
             }            
         }
     }
@@ -310,6 +311,8 @@ void removeHorizontalSeam() {
     int y_offset;
     int recv_rows;
 
+    double top_end_cost, bottom_end_cost, temp_end_cost;
+
     if (rank < extra_rows) {
         my_rows++;
         start = rank * my_rows;
@@ -317,22 +320,23 @@ void removeHorizontalSeam() {
         start = (extra_rows * (my_rows + 1)) + ((rank - extra_rows) * my_rows);
     }
     
+    my_path_costs = (double *) malloc(my_rows * current_width * sizeof(double));
+    my_previous_x = (double *) malloc(my_rows * current_width * sizeof(double));
+    my_previous_y = (double *) malloc(my_rows * current_width * sizeof(double));
     //find the lowest cost seam by computing the lowest cost paths to each pixel
     for (int x = 0; x < current_width; x++) {
-        my_path_costs = (double *) malloc(my_rows * sizeof(double));
-        my_previous_x = (double *) malloc(my_rows * sizeof(double));
-        my_previous_y = (double *) malloc(my_rows * sizeof(double));
         //compute the path costs for my rows
-        for (int y = start; y < start + my_rows; y++) {            
+        for (int y = start; y < start + my_rows; y++) {
+
             if (x == 0) {
                 path_costs[x * initial_height + y] = image_energy[x * initial_height + y];
-                my_path_costs[y - start] = path_costs[x * initial_height + y];
+                my_path_costs[(y - start) * current_width + x] = path_costs[x * initial_height + y];
 
                 previous_x[x * initial_height + y] = -1;
-                my_previous_x[y - start] = previous_x[x * initial_height + y];
+                my_previous_x[(y - start) * current_width + x] = previous_x[x * initial_height + y];
 
                 previous_y[x * initial_height + y] = -1;
-                my_previous_y[y - start] = previous_y[x * initial_height + y];
+                my_previous_y[(y - start) * current_width + x] = previous_y[x * initial_height + y];
             } else {
                 //the pixel directly left
                 energies[1] = path_costs[(x - 1) * initial_height + y];
@@ -364,60 +368,86 @@ void removeHorizontalSeam() {
 
                 //set the minimum path cost for this pixel
                 path_costs[x * initial_height + y] = min_energy + image_energy[x * initial_height + y];
-                my_path_costs[y - start] = path_costs[x * initial_height + y];
+                my_path_costs[(y - start) * current_width + x] = path_costs[x * initial_height + y];
 
                 //set the previous pixel on the minimum path's coordinates for this pixel
                 previous_x[x * initial_height + y] = prev_x;
-                my_previous_x[y - start] = previous_x[x * initial_height + y];
+                my_previous_x[(y - start) * current_width + x] = previous_x[x * initial_height + y];
 
                 previous_y[x * initial_height + y] = prev_y;
-                my_previous_y[y - start] = previous_y[x * initial_height + y];
+                my_previous_y[(y - start) * current_width + x] = previous_y[x * initial_height + y];
             }
         }
 
-        //update paths costs for all processes
-        for (int i = 0; i < numprocs; i++) {
-            if (rank == i) {
-                continue;
-            }
+        //send path cost needed to neighboring processes
+        if (numprocs > 1) {
+            if (rank != numprocs - 1) {
+                //send bottom most cost to following process
+                bottom_end_cost = path_costs[x * initial_height + (start + my_rows - 1)];        
+                MPI_Send(&bottom_end_cost, 1, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD);
 
-            if (i < extra_rows) {
-                y_offset = i * (low_rows + 1);
-                recv_rows = low_rows + 1;
-            } else {
-                y_offset = (extra_rows * (low_rows + 1)) + ((i - extra_rows) * low_rows);
-                recv_rows = low_rows;
+                //receive following process's top most cost
+                MPI_Recv(&temp_end_cost, 1, MPI_DOUBLE, rank + 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                path_costs[x * initial_height + (start + my_rows)] = temp_end_cost;
             }
+            if (rank != 0) {
+                //send top most cost to preceding process
+                top_end_cost = path_costs[x * initial_height + start];
+                MPI_Send(&top_end_cost, 1, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD);
 
-            //printf("%d %d\n", low_rows, extra_rows);
-            //printf("%d %d %d\n", rank, y_offset, recv_rows);
-
-            temp_path_costs = (double *) malloc(recv_rows * sizeof(double));
-            temp_previous_x = (double *) malloc(recv_rows * sizeof(double));
-            temp_previous_y = (double *) malloc(recv_rows * sizeof(double));
-            MPI_Sendrecv(my_path_costs, my_rows, MPI_DOUBLE, i, 0, 
-                temp_path_costs, recv_rows, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, 
-                MPI_STATUS_IGNORE);
-            MPI_Sendrecv(my_previous_x, my_rows, MPI_DOUBLE, i, 1, 
-                temp_previous_x, recv_rows, MPI_DOUBLE, i, 1, MPI_COMM_WORLD, 
-                MPI_STATUS_IGNORE);
-            MPI_Sendrecv(my_previous_y, my_rows, MPI_DOUBLE, i, 2, 
-                temp_previous_y, recv_rows, MPI_DOUBLE, i, 2, MPI_COMM_WORLD, 
-                MPI_STATUS_IGNORE);
-        
-            for (int j = 0; j < recv_rows; j++) {
-                path_costs[x * initial_height + (y_offset + j)] = temp_path_costs[j];
-                previous_x[x * initial_height + (y_offset + j)] = temp_previous_x[j];
-                previous_y[x * initial_height + (y_offset + j)] = temp_previous_y[j];
-            }
-            free(temp_path_costs);
-            free(temp_previous_x);
-            free(temp_previous_y);
+                //receive preceding process's bottom most cost
+                MPI_Recv(&temp_end_cost, 1, MPI_DOUBLE, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                path_costs[x * initial_height + (start - 1)] = temp_end_cost;
+            }            
         }
-        free(my_path_costs);
-        free(my_previous_x);
-        free(my_previous_y);
     }
+
+    //update paths costs for all processes
+    for (int i = 0; i < numprocs; i++) {
+        if (rank == i) {
+            continue;
+        }
+
+        if (i < extra_rows) {
+            y_offset = i * (low_rows + 1);
+            recv_rows = low_rows + 1;
+        } else {
+            y_offset = (extra_rows * (low_rows + 1)) + ((i - extra_rows) * low_rows);
+            recv_rows = low_rows;
+        }
+
+        //printf("%d %d\n", low_rows, extra_rows);
+        //printf("%d %d %d\n", rank, y_offset, recv_rows);
+
+        temp_path_costs = (double *) malloc(recv_rows * current_width * sizeof(double));
+        temp_previous_x = (double *) malloc(recv_rows * current_width * sizeof(double));
+        temp_previous_y = (double *) malloc(recv_rows * current_width * sizeof(double));
+        MPI_Sendrecv(my_path_costs, my_rows * current_width, MPI_DOUBLE, i, 0, 
+            temp_path_costs, recv_rows * current_width, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, 
+            MPI_STATUS_IGNORE);
+        MPI_Sendrecv(my_previous_x, my_rows * current_width, MPI_DOUBLE, i, 1, 
+            temp_previous_x, recv_rows * current_width, MPI_DOUBLE, i, 1, MPI_COMM_WORLD, 
+            MPI_STATUS_IGNORE);
+        MPI_Sendrecv(my_previous_y, my_rows * current_width, MPI_DOUBLE, i, 2, 
+            temp_previous_y, recv_rows * current_width, MPI_DOUBLE, i, 2, MPI_COMM_WORLD, 
+            MPI_STATUS_IGNORE);
+    
+        for (int j = 0; j < recv_rows; j++) {
+            int x = j / recv_rows;
+            int y = y_offset + (j % recv_rows);
+            //printf("%d %d %d %d %d\n", rank, x, y, x * initial_height + y, recv_rows * current_width);
+            //printf("%d\n", initial_height * initial_width);
+            path_costs[x * initial_height + y] = temp_path_costs[(y - y_offset) * current_width + x];
+            previous_x[x * initial_height + y] = temp_previous_x[(y - y_offset) * current_width + x];
+            previous_y[x * initial_height + y] = temp_previous_y[(y - y_offset) * current_width + x];
+        }
+        free(temp_path_costs);
+        free(temp_previous_x);
+        free(temp_previous_y);
+    }
+    free(my_path_costs);
+    free(my_previous_x);
+    free(my_previous_y);
 
     //find the ycoord the lowest cost seam starts at the right of the current image
     int y_coord = 0;
