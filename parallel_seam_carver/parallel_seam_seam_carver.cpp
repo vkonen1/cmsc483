@@ -1,8 +1,8 @@
 /******************************************
-** File: seam_carver.cpp
+** File: parallel_seam_seam_carver.cpp
 ** Authors: Augusto Blomer, Victor Konen
 **
-** Driver source code for the program
+** Parallelized lowest cost seam finder only
 ** See readme.txt
 *******************************************/
 #include "mpi.h"
@@ -44,42 +44,6 @@ int n;
 
 //mpi variables
 int rank, numprocs;
-int my_epixels_c, my_epixels_offset, extra_energy_pixels;
-double my_max_energy = 0;
-int *energy_pixels;
-
-//works
-void assignPixels() {
-    int i, temp_energy_pixels;
-
-    /* this determines which processes get which pixels */
-    my_epixels_c = n / numprocs;
-    extra_energy_pixels = (n - (my_epixels_c * numprocs));
-    //need to assign additonal pixels to some processes
-    if (extra_energy_pixels > 0) {
-        //another node for this process
-        if (rank < extra_energy_pixels) {
-            my_epixels_c++;
-            my_epixels_offset = rank * my_epixels_c;
-        } else {
-            my_epixels_offset = extra_energy_pixels * (my_epixels_c + 1) + (rank - extra_energy_pixels) * my_epixels_c;
-        }
-    } else {
-        my_epixels_offset = rank * my_epixels_c;    
-    }
-
-    //update my knowledge of pixels counts assigned to each process
-    energy_pixels = new int[numprocs];
-    energy_pixels[rank] = my_epixels_c;
-    for (i = 0; i < numprocs; i++) {
-        if (rank == i) {
-            continue;
-        }
-
-        MPI_Sendrecv(&my_epixels_c, 1, MPI_INT, i, 0, &temp_energy_pixels, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        energy_pixels[i] = temp_energy_pixels;
-    }
-}
 
 //computes the x gradient component for the energy function
 double gradx(int x, int y) {
@@ -120,62 +84,20 @@ double grady(int x, int y) {
 //computes the energy of the pixel at x,y and updates the max energy if needed
 double energy(int x, int y) {
     double result = sqrt(pow(gradx(x, y), 2) + pow(grady(x, y), 2));
-    /*
-    maximum energy communication results in a serious slowdown and does not
-    have a major effect on the resulting image quality
-    */
-    if (result > my_max_energy) {
-        my_max_energy = result;
+    if (result > max_energy) {
+        max_energy = result;
     }
     return result;
 }
 
 //finds the energy of each pixel in the image and stores it
 void computeImageEnergy() {
-    int x, y, i, j, tempc, offset = 0;
-    double *my_img_energy;
-    double *temp_img_energy;
-
-    my_img_energy = (double *)malloc(my_epixels_c * sizeof(double));
-    //compute the energy of my pixels
-    for (i = my_epixels_offset; i < my_epixels_offset + my_epixels_c; i++) {
-        x = i / initial_height;
-        y = i % initial_height;
-        if (x > current_width || y > current_height) {
-            //printf("skipped\n");
-            my_img_energy[i - my_epixels_offset] = image_energy[i];
+    //compute the energy of the pixels
+    for (int i = 0; i < initial_width; i++) {
+        for (int j = 0; j < initial_height; j++) {
+            image_energy[i * initial_height + j] = energy(i, j);
         }
-        //printf("%d %d\n", x * initial_height + y, i);
-        //printf("%d %d %d\n", rank, x, y);
-        image_energy[i] = energy(x, y);
-        my_img_energy[i - my_epixels_offset] = image_energy[i];
     }
-
-    //send and receive data to and from each process to update image_energy for self
-    for (i = 0; i < numprocs; i++) {
-        if (rank == i) {
-            offset += my_epixels_c;
-            continue;
-        }
-        if (i > 1) {
-            offset += energy_pixels[i - 1];
-        }
-        if (i == 1 && rank != 0) {
-            offset += energy_pixels[0];
-        }
-        tempc = energy_pixels[i];
-        temp_img_energy = (double *)malloc(tempc * sizeof(double));
-        //printf("%d send %d pixels and recv %d pixels from %d\n", rank, my_epixels_c, energy_pixels[i], i);
-        MPI_Sendrecv(my_img_energy, my_epixels_c, MPI_DOUBLE, i, 0, temp_img_energy, tempc, MPI_DOUBLE, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    
-        for (j = 0; j < tempc; j++) {
-            //printf("%d %d\n", rank, offset + j);
-            //printf("%d %d %lf\n", rank, offset + j, image_energy[offset + j]);
-            image_energy[offset + j] = temp_img_energy[j];
-        }
-        free(temp_img_energy);
-    }
-    free(my_img_energy);
 }
 
 //removes the lowest energy vertical seam from the image
@@ -513,8 +435,6 @@ int main(int argc, char *argv[]) {
     if (image_energy == NULL || path_costs == NULL || previous_x == NULL || previous_y == NULL) {
         printf("problem");
     }
-
-    assignPixels();
 
     //remove vertical seams until reaching the target width
     while (current_width > target_width) {

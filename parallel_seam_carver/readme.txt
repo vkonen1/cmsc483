@@ -42,7 +42,8 @@ Exits gracefully if output_width or output_height are greater than the input
 image's corresponding dimensions
 
 Building and Running:
-Use 'make' to compile programs
+Use 'make <program name>' to compile program components
+of 'make' to compile the combined components
 
 Use './imgproc option image_file.(png|jpg) text_file.txt' to convert images to
 lab or back
