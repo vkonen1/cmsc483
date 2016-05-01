@@ -322,8 +322,19 @@ void removeHorizontalSeam() {
         }
     }
     
-    MPI_Allgather(&previous_y[start * initial_height], n / numprocs, MPI_INT, previous_y, n / numprocs, MPI_INT,
-                    MPI_COMM_WORLD);
+    int *recvcounts = new int[numprocs];
+    int *displs = new int[numprocs];
+    
+    for (int i = 0; i < numprocs; i++)
+        recvcounts[i] = columns_per_process * initial_height;
+    recvcounts[numprocs - 1] += (current_width % numprocs) * initial_height;
+    
+    displs[0] = 0;
+    for (int i = 1; i < numprocs; i++)
+        displs[i] = displs[i - 1] + recvcounts[i - 1];
+    
+    MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
+                       &previous_y[0], recvcounts, displs, MPI_INT, MPI_COMM_WORLD);
     
     //find the ycoord the lowest cost seam starts at the right of the current image
     int y_coord = 0;
