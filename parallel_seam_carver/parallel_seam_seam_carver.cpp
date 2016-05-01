@@ -108,10 +108,11 @@ void removeVerticalSeam() {
     int prev_y;
     
     // split up work between processes
-    double *path_cost = (double *) malloc(initial_height * sizeof(double)); // path costs that will be sent
+    double *path_cost = (double *) malloc(initial_width * sizeof(double)); // path costs that will be sent
     int rows_per_process = current_height / numprocs;
     int start = rows_per_process * rank;
     int end = rows_per_process * (rank + 1);
+    int pdim;
     if (rank == numprocs - 1)
         end += (current_height % numprocs);
     
@@ -122,6 +123,7 @@ void removeVerticalSeam() {
             MPI_Recv(path_cost, current_height, MPI_DOUBLE, rank - 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             for (int i = 0; i < current_width; i++)
                 path_costs[i * initial_height + (y - 1)] = path_cost[i];
+            free(path_cost);
         }
         
         for (int x = 0; x < current_width; x++) {
@@ -170,11 +172,13 @@ void removeVerticalSeam() {
             for (int i = 0; i < current_width; i++)
                 path_cost[i] = path_costs[i * initial_height + y];
             MPI_Send(path_cost, current_height, MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD);
+            free(path_cost);
         }
     }
     
-    int *recvcounts = new int[numprocs];
-    int *displs = new int[numprocs];
+    int *recvcounts = (int *)malloc(numprocs * sizeof(int));
+    int *displs = (int *)malloc(numprocs * sizeof(int));
+
     
     for (int i = 0; i < numprocs; i++)
         recvcounts[i] = rows_per_process * initial_height;
@@ -183,8 +187,15 @@ void removeVerticalSeam() {
     displs[0] = 0;
     for (int i = 1; i < numprocs; i++)
         displs[i] = displs[i - 1] + recvcounts[i - 1];
+
+    if (initial_height > initial_width) {
+        pdim = initial_height;
+    } else {
+        pdim = initial_width;
+    }
     
-    int *previous = (int *) malloc(initial_width * initial_height * sizeof(int));
+    int *previous = (int *) malloc(pdim * pdim * sizeof(int));
+
     
     for (int i = 0; i < current_height; i++) {
         for (int j = 0; j < current_width; j++) {
@@ -194,12 +205,15 @@ void removeVerticalSeam() {
     
     MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
                        &previous[0], recvcounts, displs, MPI_INT, MPI_COMM_WORLD);
-    
+    free(recvcounts);
+    free(displs);
     for (int i = 0; i < current_height; i++) {
         for (int j = 0; j < current_width; j++) {
             previous_x[i * initial_height + j] = previous[j * initial_height + i];
         }
     }
+
+    free(previous);
     
     //find the xcoord the lowest cost seam starts at the bottom of the current image
     int x_coord = 0;
@@ -249,6 +263,7 @@ void removeHorizontalSeam() {
             MPI_Recv(path_cost, current_height, MPI_DOUBLE, rank - 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             for (int i = 0; i < current_height; i++)
                 path_costs[(x - 1) * initial_height + i] = path_cost[i];
+            free(path_cost);
         }
         
         for (int y = 0; y < current_height; y++) {
@@ -295,13 +310,18 @@ void removeHorizontalSeam() {
         }
         
         if (rank < (numprocs - 1) && x == (end - 1)) {
+            free(path_cost);
             path_cost = &path_costs[x * initial_height];
             MPI_Send(path_cost, current_height, MPI_DOUBLE, rank + 1, 1, MPI_COMM_WORLD);
         }
     }
+
+
+
     
-    int *recvcounts = new int[numprocs];
-    int *displs = new int[numprocs];
+    int *recvcounts = (int *)malloc(numprocs * sizeof(int));
+    int *displs = (int *)malloc(numprocs * sizeof(int));
+
     
     for (int i = 0; i < numprocs; i++)
         recvcounts[i] = columns_per_process * initial_height;
@@ -313,7 +333,8 @@ void removeHorizontalSeam() {
     
     MPI_Allgatherv(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL,
                        &previous_y[0], recvcounts, displs, MPI_INT, MPI_COMM_WORLD);
-    
+    free(recvcounts);
+    free(displs);
     //find the ycoord the lowest cost seam starts at the right of the current image
     int y_coord = 0;
     if (rank == numprocs - 1) {
